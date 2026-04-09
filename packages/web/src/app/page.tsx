@@ -12,7 +12,7 @@
 import { useState, useCallback, useRef, useEffect } from "react";
 import dynamic from "next/dynamic";
 import { motion } from "framer-motion";
-import { Settings2, CodeXml } from "lucide-react";
+import { Settings2, CodeXml, MessageCircle } from "lucide-react";
 import { defaultLightSettings, type LightSettings } from "@/components/svg-to-3d-canvas";
 import { AnimatePresence } from "framer-motion";
 import { Button } from "@/components/ui/button";
@@ -25,6 +25,7 @@ import { InputPanel } from "@/components/input-panel";
 import { ControlsPanel } from "@/components/controls-panel";
 import { ExportModal } from "@/components/export-bar";
 import { EmbedDialog } from "@/components/embed-dialog";
+import { Freedback } from "@/components/freedback";
 import {
   defaultTextureSettings,
   defaultMaterialSettings,
@@ -78,6 +79,7 @@ export default function Home() {
   const [currentText, setCurrentText] = useState("3DSVG");
   const [currentFont, setCurrentFont] = useState("Rubik Mono One");
   const [embedOpen, setEmbedOpen] = useState(false);
+  const [feedbackOpen, setFeedbackOpen] = useState(false);
 
   // --- Export bar ---
   const [exportOpen] = useState(true);
@@ -253,13 +255,26 @@ export default function Home() {
             <Button
               variant="ghost"
               size="icon"
+              onClick={() => setFeedbackOpen(true)}
+              className="rounded-full bg-card/70 backdrop-blur-xl border border-white/[0.06] shadow-[0_8px_32px_oklch(0_0_0/0.4)] h-10 w-10"
+            >
+              <MessageCircle className="h-4 w-4" />
+            </Button>
+          </TooltipTrigger>
+          <TooltipContent side="bottom">Feedback</TooltipContent>
+        </Tooltip>
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <Button
+              variant="ghost"
+              size="icon"
               onClick={() => setEmbedOpen(true)}
               className="rounded-full bg-card/70 backdrop-blur-xl border border-white/[0.06] shadow-[0_8px_32px_oklch(0_0_0/0.4)] h-10 w-10"
             >
               <CodeXml className="h-4 w-4" />
             </Button>
           </TooltipTrigger>
-          <TooltipContent side="left">Embed</TooltipContent>
+          <TooltipContent side="bottom">Embed</TooltipContent>
         </Tooltip>
         <Tooltip>
           <TooltipTrigger asChild>
@@ -274,7 +289,7 @@ export default function Home() {
               <Settings2 className="h-4 w-4" />
             </Button>
           </TooltipTrigger>
-          <TooltipContent side="left">Settings</TooltipContent>
+          <TooltipContent side="bottom">Settings</TooltipContent>
         </Tooltip>
       </div>
 
@@ -346,6 +361,9 @@ export default function Home() {
           </div>
         </motion.div>
       )}
+
+      {/* Feedback widget */}
+      <Freedback storage="email" open={feedbackOpen} onOpenChange={setFeedbackOpen} hideButton />
 
       {/* Embed dialog */}
       <EmbedDialog
