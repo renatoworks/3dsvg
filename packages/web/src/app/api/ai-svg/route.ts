@@ -124,7 +124,7 @@ async function callGemini(
   // actual response. Find the first non-thought text part so we always get
   // the real output, not the internal reasoning chain.
   const parts = data.candidates?.[0]?.content?.parts ?? [];
-  const textPart = parts.find((p) => !p.thought && typeof p.text === "string");
+  const textPart = parts.find((p) => p.thought !== true && typeof p.text === "string");
   return textPart?.text ?? "";
 }
 
@@ -191,9 +191,9 @@ function repairTruncatedSvg(svg: string): string {
   const lastGt = svg.lastIndexOf(">");
   let s = lastGt !== -1 ? svg.slice(0, lastGt + 1) : svg;
 
-  // Balance open <g …> / </g> pairs (depth can go > 1 for nested groups)
+  // Balance open <g …> / </g> pairs, excluding self-closing <g ... />
   const openGs =
-    (s.match(/<g[\s>]/gi) ?? []).length -
+    (s.match(/<g[\s>][^>]*(?<!\/\s*)>/gi) ?? []).length -
     (s.match(/<\/g\s*>/gi) ?? []).length;
   for (let i = 0; i < Math.max(0, openGs); i++) s += "</g>";
 
@@ -202,8 +202,8 @@ function repairTruncatedSvg(svg: string): string {
 }
 
 function extractSvg(raw: string): string | null {
-  // Try to find a complete <svg>…</svg> block first
-  const completeMatch = raw.match(/<svg[\s\S]*<\/svg>/i);
+  // Try to find a complete <svg>…</svg> block first (non-greedy: stop at first </svg>)
+  const completeMatch = raw.match(/<svg[\s\S]*?<\/svg>/i);
   if (completeMatch) return sanitizeSvg(completeMatch[0]);
 
   // Fall back: find the start of an SVG even if truncated
