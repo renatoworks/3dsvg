@@ -34,6 +34,7 @@ import {
   type IntroAnimationProps,
   type AnimationType,
 } from "./controls";
+import { preprocessSVG } from "./svg-preprocess";
 
 // ---------------------------------------------------------------------------
 // ExtrudedSVG
@@ -56,7 +57,7 @@ export interface ExtrudedSVGProps {
 }
 
 // ---------------------------------------------------------------------------
-function recomputeTriplanarUVs(geo: THREE.BufferGeometry, bb: THREE.Box3) {
+function recomputeTriplanarUVs(geo: THREE.BufferGeometry, bb: THREE.Box3, frontFaceOnly = false) {
   const bbSize = new THREE.Vector3();
   bb.getSize(bbSize);
   const uvAttr = geo.attributes.uv;
@@ -68,20 +69,28 @@ function recomputeTriplanarUVs(geo: THREE.BufferGeometry, bb: THREE.Box3) {
     const px = posAttr.getX(j);
     const py = posAttr.getY(j);
     const pz = posAttr.getZ(j);
-    const nx = Math.abs(normalAttr.getX(j));
-    const ny = Math.abs(normalAttr.getY(j));
-    const nz = Math.abs(normalAttr.getZ(j));
 
     let u: number, v: number;
-    if (nz >= nx && nz >= ny) {
+    if (frontFaceOnly) {
+      // Project all faces using the front-face (XY) mapping so that side
+      // faces sample the nearest edge color — giving the "extruded 2D" look.
       u = (px - bb.min.x) / maxDimUv;
-      v = 1 - (py - bb.min.y) / maxDimUv;
-    } else if (nx >= ny) {
-      u = (pz - bb.min.z) / maxDimUv;
       v = 1 - (py - bb.min.y) / maxDimUv;
     } else {
-      u = (px - bb.min.x) / maxDimUv;
-      v = (pz - bb.min.z) / maxDimUv;
+      const nx = Math.abs(normalAttr.getX(j));
+      const ny = Math.abs(normalAttr.getY(j));
+      const nz = Math.abs(normalAttr.getZ(j));
+
+      if (nz >= nx && nz >= ny) {
+        u = (px - bb.min.x) / maxDimUv;
+        v = 1 - (py - bb.min.y) / maxDimUv;
+      } else if (nx >= ny) {
+        u = (pz - bb.min.z) / maxDimUv;
+        v = 1 - (py - bb.min.y) / maxDimUv;
+      } else {
+        u = (px - bb.min.x) / maxDimUv;
+        v = (pz - bb.min.z) / maxDimUv;
+      }
     }
     uvAttr.setXY(j, u, v);
   }
@@ -96,12 +105,17 @@ export interface ExtrudedGeometryResult {
   geometries: THREE.BufferGeometry[];
   center: THREE.Vector3;
   baseScale: number;
+  hasMultipleColors: boolean;
+  /** 2D content bounds + UV normalizer — used to crop the rasterized texture */
+  shapeBounds: { minX: number; minY: number; width: number; height: number; maxDimUv: number } | null;
 }
 
 const EMPTY_RESULT: ExtrudedGeometryResult = {
   geometries: [],
   center: new THREE.Vector3(),
   baseScale: 1,
+  hasMultipleColors: false,
+  shapeBounds: null,
 };
 
 // How many shapes to extrude per frame before yielding
@@ -122,10 +136,15 @@ function isViewBoxRect(shape: THREE.Shape, vbW: number, vbH: number): boolean {
   return Math.abs(size.x - vbW) / vbW < tolerance && Math.abs(size.y - vbH) / vbH < tolerance;
 }
 
-function parseShapesFromSVG(svgString: string): THREE.Shape[] {
+export interface ParsedShape {
+  shape: THREE.Shape;
+  color: THREE.Color | null;
+}
+
+function parseShapesFromSVG(svgString: string): ParsedShape[] {
   const loader = new SVGLoader();
-  const svgData = loader.parse(svgString);
-  const allShapes: THREE.Shape[] = [];
+  const svgData = loader.parse(preprocessSVG(svgString));
+  const allShapes: ParsedShape[] = [];
 
   // Parse viewBox for background rect detection
   const vbMatch = svgString.match(/viewBox\s*=\s*["']\s*([\d.\-]+)\s+([\d.\-]+)\s+([\d.\-]+)\s+([\d.\-]+)/);
@@ -137,16 +156,20 @@ function parseShapesFromSVG(svgString: string): THREE.Shape[] {
     const hasFill = style?.fill && style.fill !== "none" && style.fill !== "transparent";
     const hasStroke = style?.stroke && style.stroke !== "none" && style.stroke !== "transparent";
 
+    // Extract fill color from the path
+    const fillColor = hasFill ? path.color : null;
+
     if (hasFill) {
       const shapes = SVGLoader.createShapes(path);
       for (const shape of shapes) {
         // Skip full-viewBox rectangles (background artifacts from export tools)
         if (vbW && vbH && isViewBoxRect(shape, vbW, vbH)) continue;
-        allShapes.push(shape);
+        allShapes.push({ shape, color: fillColor });
       }
     }
 
     if (hasStroke) {
+      const strokeColor = hasStroke && style?.stroke ? new THREE.Color(style.stroke) : null;
       const strokeWidth = parseFloat(style?.strokeWidth ?? "2");
       const divisions = 12;
       path.subPaths.forEach((subPath) => {
@@ -175,12 +198,14 @@ function parseShapesFromSVG(svgString: string): THREE.Shape[] {
         for (let i = 1; i < leftSide.length; i++) shape.lineTo(leftSide[i].x, leftSide[i].y);
         for (let i = rightSide.length - 1; i >= 0; i--) shape.lineTo(rightSide[i].x, rightSide[i].y);
         shape.closePath();
-        allShapes.push(shape);
+        allShapes.push({ shape, color: strokeColor });
       });
     }
 
     if (!hasFill && !hasStroke) {
-      allShapes.push(...SVGLoader.createShapes(path));
+      for (const shape of SVGLoader.createShapes(path)) {
+        allShapes.push({ shape, color: null });
+      }
     }
   });
 
@@ -223,20 +248,35 @@ export function useExtrudedGeometry(
 
     (async () => {
       // Step 1: Parse shapes (fast, synchronous)
-      const allShapes = parseShapesFromSVG(svgString);
+      const parsedShapes = parseShapesFromSVG(svgString);
 
-      if (allShapes.length === 0 || cancelRef.current || version !== versionRef.current) {
+      if (parsedShapes.length === 0 || cancelRef.current || version !== versionRef.current) {
         setResult(EMPTY_RESULT);
         setLoading(false);
         return;
       }
 
-      // Step 2: Compute extrude settings
+      const allShapes = parsedShapes.map((p) => p.shape);
+
+      // Determine if this SVG has multiple distinct fill colors
+      const colorSet = new Set<string>();
+      for (const p of parsedShapes) {
+        colorSet.add(p.color ? p.color.getHexString() : "__null__");
+      }
+      const hasMultipleColors = colorSet.size > 1;
+
+      // Step 2: Compute extrude settings + 2D content bounds
       const tempGeo = new THREE.ShapeGeometry(allShapes);
       tempGeo.computeBoundingBox();
+      const flatBB = tempGeo.boundingBox!;
       const flatSize = new THREE.Vector3();
-      tempGeo.boundingBox!.getSize(flatSize);
+      flatBB.getSize(flatSize);
       const maxFlatDim = Math.max(flatSize.x, flatSize.y, 1);
+
+      const flatShapeBounds = hasMultipleColors
+        ? { minX: flatBB.min.x, minY: flatBB.min.y, width: flatSize.x, height: flatSize.y }
+        : null;
+
       tempGeo.dispose();
 
       // Reduce quality for complex SVGs to keep it responsive
@@ -302,7 +342,7 @@ export function useExtrudedGeometry(
       // Step 5: UVs + centering
       merged.computeBoundingBox();
       merged.computeVertexNormals();
-      recomputeTriplanarUVs(merged, merged.boundingBox!);
+      recomputeTriplanarUVs(merged, merged.boundingBox!, hasMultipleColors);
 
       const bb = merged.boundingBox!;
       const ctr = new THREE.Vector3();
@@ -312,6 +352,12 @@ export function useExtrudedGeometry(
       const maxDim = Math.max(size.x, size.y, size.z);
       const s = maxDim > 0 ? 4 / maxDim : 1;
 
+      // Include the actual maxDimUv (from the 3D bounding box) so the
+      // rasterized SVG texture padding matches the UV normalisation.
+      const shapeBounds = flatShapeBounds
+        ? { ...flatShapeBounds, maxDimUv: Math.max(size.x, size.y, size.z) || 1 }
+        : null;
+
       if (cancelRef.current || version !== versionRef.current) {
         merged.dispose();
         setLoading(false);
@@ -319,7 +365,7 @@ export function useExtrudedGeometry(
       }
 
       setProgress(100);
-      setResult({ geometries: [merged], center: ctr, baseScale: s });
+      setResult({ geometries: [merged], center: ctr, baseScale: s, hasMultipleColors, shapeBounds });
       setLoading(false);
     })();
 
@@ -327,6 +373,75 @@ export function useExtrudedGeometry(
   }, [svgString, depth, smoothness]);
 
   return { ...result, loading, progress, cancel };
+}
+
+// ---------------------------------------------------------------------------
+// useSVGTexture — rasterize an SVG to a THREE.Texture via the browser's
+// native SVG renderer. This captures gradients, blend modes, clip paths, etc.
+// The texture is cropped to `bounds` so it aligns with the triplanar UVs.
+// ---------------------------------------------------------------------------
+
+function useSVGTexture(
+  svgString: string,
+  bounds: ExtrudedGeometryResult["shapeBounds"],
+  enabled: boolean,
+): THREE.Texture | null {
+  const [texture, setTexture] = useState<THREE.Texture | null>(null);
+
+  useEffect(() => {
+    if (!enabled || !bounds || !svgString) {
+      setTexture(null);
+      return;
+    }
+
+    let cancelled = false;
+
+    // Render the SVG with a viewBox that matches the UV normalisation used
+    // by recomputeTriplanarUVs (which divides by maxDimUv — the largest
+    // axis of the 3D bounding box, including depth).
+    const maxDim = bounds.maxDimUv;
+    const texSize = 1024;
+
+    // Pad the viewBox to a square of size maxDimUv, anchored at the
+    // content's min corner, so the texture aligns with the triplanar UVs.
+    const vbX = bounds.minX;
+    const vbY = bounds.minY;
+
+    const wrappedSVG = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="${vbX} ${vbY} ${maxDim} ${maxDim}" width="${texSize}" height="${texSize}">`
+      + svgString.replace(/<svg[^>]*>/, "").replace(/<\/svg>\s*$/, "")
+      + "</svg>";
+
+    const blob = new Blob([wrappedSVG], { type: "image/svg+xml;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    const img = new Image();
+    img.onload = () => {
+      if (cancelled) { URL.revokeObjectURL(url); return; }
+      const canvas = document.createElement("canvas");
+      canvas.width = texSize;
+      canvas.height = texSize;
+      const ctx = canvas.getContext("2d")!;
+      ctx.drawImage(img, 0, 0, texSize, texSize);
+      URL.revokeObjectURL(url);
+
+      const tex = new THREE.CanvasTexture(canvas);
+      tex.colorSpace = THREE.SRGBColorSpace;
+      tex.needsUpdate = true;
+      setTexture(tex);
+    };
+    img.onerror = () => { URL.revokeObjectURL(url); };
+    img.src = url;
+
+    return () => {
+      cancelled = true;
+    };
+  }, [svgString, bounds, enabled]);
+
+  // Dispose on unmount
+  useEffect(() => {
+    return () => { texture?.dispose(); };
+  }, [texture]);
+
+  return texture;
 }
 
 export function ExtrudedSVG({
@@ -344,11 +459,11 @@ export function ExtrudedSVG({
   textureOffset = [0, 0],
   onLoadingChange,
 }: ExtrudedSVGProps) {
-  const [texture, setTexture] = useState<THREE.Texture | null>(null);
+  const [userTexture, setUserTexture] = useState<THREE.Texture | null>(null);
 
   useEffect(() => {
     if (!textureUrl) {
-      setTexture(null);
+      setUserTexture(null);
       return;
     }
     const loader = new THREE.TextureLoader();
@@ -357,20 +472,25 @@ export function ExtrudedSVG({
       tex.wrapT = THREE.RepeatWrapping;
       tex.colorSpace = THREE.SRGBColorSpace;
       tex.needsUpdate = true;
-      setTexture(tex);
+      setUserTexture(tex);
     });
   }, [textureUrl]);
 
   useEffect(() => {
-    if (!texture) return;
-    texture.offset.set(textureOffset[0], textureOffset[1]);
-    texture.repeat.set(textureRepeat, textureRepeat);
-    texture.rotation = textureRotation;
-    texture.center.set(0.5, 0.5);
-    texture.needsUpdate = true;
-  }, [texture, textureRepeat, textureRotation, textureOffset]);
+    if (!userTexture) return;
+    userTexture.offset.set(textureOffset[0], textureOffset[1]);
+    userTexture.repeat.set(textureRepeat, textureRepeat);
+    userTexture.rotation = textureRotation;
+    userTexture.center.set(0.5, 0.5);
+    userTexture.needsUpdate = true;
+  }, [userTexture, textureRepeat, textureRotation, textureOffset]);
 
-  const { geometries, center, baseScale, loading, progress } = useExtrudedGeometry(svgString, depth, smoothness);
+  const { geometries, center, baseScale, hasMultipleColors, shapeBounds, loading, progress } =
+    useExtrudedGeometry(svgString, depth, smoothness);
+
+  // Auto-rasterize multi-color SVGs (gradients, blend modes, etc.)
+  const svgTexture = useSVGTexture(svgString, shapeBounds, hasMultipleColors && !textureUrl);
+  const activeTexture = userTexture ?? svgTexture;
 
   const onLoadingChangeRef = useRef(onLoadingChange);
   onLoadingChangeRef.current = onLoadingChange;
@@ -389,20 +509,20 @@ export function ExtrudedSVG({
         const isGold = materialSettings.preset === "gold";
         const isEmissive = materialSettings.preset === "emissive";
         const wantsTransparency = materialSettings.transparent || materialSettings.opacity < 1;
-        const baseColor = texture ? "#ffffff" : isGold ? "#d4a017" : color;
+        const baseColor = activeTexture ? "#ffffff" : isGold ? "#d4a017" : color;
         const emissiveColor = isEmissive ? color : "#000000";
         const emissiveIntensity = preset.emissiveIntensity ?? 0;
         const transmissionAmount = wantsTransparency ? (1 - materialSettings.opacity) : 0;
 
         return (
           <mesh
-            key={`${i}-${texture ? "tex" : "notex"}-${materialSettings.preset}-${wantsTransparency}`}
+            key={`${i}-${activeTexture ? "tex" : "notex"}-${materialSettings.preset}-${wantsTransparency}`}
             geometry={geometry}
             position={[-center.x, -center.y, -center.z]}
           >
             <meshPhysicalMaterial
               color={baseColor}
-              map={texture ?? undefined}
+              map={activeTexture ?? undefined}
               metalness={materialSettings.metalness}
               roughness={wantsTransparency ? Math.max(0.02, materialSettings.roughness * 0.3) : materialSettings.roughness}
               transmission={transmissionAmount}
