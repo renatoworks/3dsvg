@@ -3,11 +3,12 @@
  * AI SVG Generation API — Multi-Provider
  * =============================================================================
  *
- * Accepts { prompt, provider, apiKey } and returns an SVG string.
+ * Accepts { prompt, provider, apiKey, model? } and returns an SVG string.
  * The SVG is designed for 3D extrusion: flat, single-color, black fills,
  * fill-rule="evenodd" so interior holes extrude correctly.
  *
- * Supported providers: openai, anthropic, google, groq, mistral.
+ * Supported providers: openai, anthropic, google, groq, mistral, together,
+ *   cerebras, deepseek, xai, cohere, huggingface.
  * The caller supplies their own API key — this route only proxies the request
  * so the key is never exposed in client-side code.
  */
@@ -156,7 +157,7 @@ function extractSvg(raw: string): string | null {
 // ---------------------------------------------------------------------------
 
 export async function POST(req: NextRequest) {
-  let body: { prompt?: unknown; provider?: unknown; apiKey?: unknown };
+  let body: { prompt?: unknown; provider?: unknown; apiKey?: unknown; model?: unknown };
   try {
     body = await req.json();
   } catch {
@@ -166,6 +167,8 @@ export async function POST(req: NextRequest) {
   const prompt = (body.prompt ?? "").toString().trim();
   const providerId = (body.provider ?? "openai").toString().trim();
   const apiKey = (body.apiKey ?? "").toString().trim();
+  // Optional model override — falls back to provider's defaultModel
+  const modelOverride = body.model ? (body.model as string).toString().trim() : null;
 
   if (!prompt) {
     return NextResponse.json({ error: "Prompt is required" }, { status: 400 });
@@ -188,20 +191,17 @@ export async function POST(req: NextRequest) {
     );
   }
 
+  const model = modelOverride ?? provider.defaultModel;
+
   try {
     let raw: string;
 
     if (provider.openaiCompat) {
-      raw = await callOpenAICompat(
-        apiKey,
-        provider.model,
-        prompt,
-        provider.baseUrl
-      );
+      raw = await callOpenAICompat(apiKey, model, prompt, provider.baseUrl);
     } else if (provider.id === "anthropic") {
-      raw = await callAnthropic(apiKey, provider.model, prompt);
+      raw = await callAnthropic(apiKey, model, prompt);
     } else if (provider.id === "google") {
-      raw = await callGemini(apiKey, provider.model, prompt);
+      raw = await callGemini(apiKey, model, prompt);
     } else {
       return NextResponse.json(
         { error: `No handler for provider: ${providerId}` },

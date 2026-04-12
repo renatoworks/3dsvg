@@ -5,34 +5,57 @@
  *
  * Multi-provider AI → SVG → 3D canvas.
  *
- * Users pick a provider, paste their own API key (saved to localStorage per
- * provider), type a description, and hit Generate. The returned SVG is passed
- * up via onSvgChange and previewed inline.
+ * Flow:
+ *  1. Pick a provider from the dropdown
+ *  2. Enter / paste your API key (saved per-provider in localStorage)
+ *  3. Models are fetched live from the provider's API; a static fallback is
+ *     shown immediately while the request is in flight
+ *  4. Pick a model (or keep the default)
+ *  5. Describe your shape → Generate
  */
 
 "use client";
 
 import { useState, useRef, useEffect, useCallback } from "react";
-import { Sparkles, RefreshCw, KeyRound, ExternalLink, ChevronDown, ChevronUp, Eye, EyeOff } from "lucide-react";
+import {
+  Sparkles,
+  RefreshCw,
+  KeyRound,
+  ExternalLink,
+  ChevronDown,
+  ChevronUp,
+  Eye,
+  EyeOff,
+} from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { AI_PROVIDERS, DEFAULT_PROVIDER_ID, type AiProvider } from "@/lib/ai-providers";
+import {
+  AI_PROVIDERS,
+  DEFAULT_PROVIDER_ID,
+  type AiProvider,
+} from "@/lib/ai-providers";
+
+// ---------------------------------------------------------------------------
+// localStorage helpers
+// ---------------------------------------------------------------------------
 
 const LS_PROVIDER_KEY = "ai-provider-id";
 const lsApiKey = (id: string) => `ai-provider-key-${id}`;
+const lsModel = (id: string) => `ai-provider-model-${id}`;
 
-function loadApiKey(providerId: string): string {
+function loadFromLS(key: string): string {
   if (typeof window === "undefined") return "";
-  return localStorage.getItem(lsApiKey(providerId)) ?? "";
+  return localStorage.getItem(key) ?? "";
 }
 
-function saveApiKey(providerId: string, key: string) {
+function saveToLS(key: string, value: string) {
   if (typeof window === "undefined") return;
-  if (key) {
-    localStorage.setItem(lsApiKey(providerId), key);
-  } else {
-    localStorage.removeItem(lsApiKey(providerId));
-  }
+  if (value) localStorage.setItem(key, value);
+  else localStorage.removeItem(key);
 }
+
+// ---------------------------------------------------------------------------
+// Component
+// ---------------------------------------------------------------------------
 
 interface AiInputProps {
   onSvgChange: (svg: string) => void;
@@ -40,55 +63,163 @@ interface AiInputProps {
 }
 
 export function AiInput({ onSvgChange, active }: AiInputProps) {
-  const [providerId, setProviderId] = useState<string>(() => {
-    if (typeof window === "undefined") return DEFAULT_PROVIDER_ID;
-    return localStorage.getItem(LS_PROVIDER_KEY) ?? DEFAULT_PROVIDER_ID;
-  });
-  const [apiKey, setApiKey] = useState<string>(() => loadApiKey(
-    typeof window !== "undefined"
-      ? (localStorage.getItem(LS_PROVIDER_KEY) ?? DEFAULT_PROVIDER_ID)
-      : DEFAULT_PROVIDER_ID
-  ));
+  // ── Provider & key ────────────────────────────────────────────────────────
+  const [providerId, setProviderId] = useState<string>(() =>
+    loadFromLS(LS_PROVIDER_KEY) || DEFAULT_PROVIDER_ID
+  );
+  const [apiKey, setApiKey] = useState<string>(() =>
+    loadFromLS(lsApiKey(loadFromLS(LS_PROVIDER_KEY) || DEFAULT_PROVIDER_ID))
+  );
   const [showKey, setShowKey] = useState(false);
-  const [keySettingsOpen, setKeySettingsOpen] = useState(false);
+  const [keyOpen, setKeyOpen] = useState(false);
+
+  // ── Models ────────────────────────────────────────────────────────────────
+  const [models, setModels] = useState<string[]>([]);
+  const [selectedModel, setSelectedModel] = useState<string>("");
+  const [modelsFetching, setModelsFetching] = useState(false);
+  const [modelsWarning, setModelsWarning] = useState<string | null>(null);
+
+  // ── Generation ────────────────────────────────────────────────────────────
   const [prompt, setPrompt] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [generatedSvg, setGeneratedSvg] = useState<string | null>(null);
+
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const fetchDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const provider: AiProvider =
     AI_PROVIDERS.find((p) => p.id === providerId) ?? AI_PROVIDERS[0];
 
-  // Auto-open key settings when there's no API key for the selected provider
+  // ── Auto-open key section when no key is saved ────────────────────────────
   useEffect(() => {
-    if (!apiKey) setKeySettingsOpen(true);
+    if (!apiKey) setKeyOpen(true);
   }, [apiKey]);
 
+  // Focus textarea when tab becomes active
   useEffect(() => {
     if (active) textareaRef.current?.focus();
   }, [active]);
 
-  const switchProvider = useCallback((id: string) => {
-    setProviderId(id);
-    localStorage.setItem(LS_PROVIDER_KEY, id);
-    const saved = loadApiKey(id);
-    setApiKey(saved);
-    setError(null);
-    if (!saved) setKeySettingsOpen(true);
+  // ── Fetch live model list ─────────────────────────────────────────────────
+  const fetchModels = useCallback(
+    async (pId: string, key: string) => {
+      if (!key.trim()) return;
+
+      setModelsFetching(true);
+      setModelsWarning(null);
+
+      try {
+        const res = await fetch("/api/ai-models", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ provider: pId, apiKey: key.trim() }),
+        });
+        const data = (await res.json()) as {
+          models?: string[];
+          warning?: string;
+        };
+
+        const fetched = data.models ?? [];
+        const prov = AI_PROVIDERS.find((p) => p.id === pId) ?? AI_PROVIDERS[0];
+
+        // Merge live + static (static already included by the route but keep robust)
+        const merged = [
+          ...fetched,
+          ...prov.staticModels.filter((m) => !fetched.includes(m)),
+        ];
+
+        setModels(merged);
+        if (data.warning) setModelsWarning(data.warning);
+
+        // Restore saved model or fall back to default
+        const saved = loadFromLS(lsModel(pId));
+        const pick = merged.includes(saved)
+          ? saved
+          : merged.includes(prov.defaultModel)
+            ? prov.defaultModel
+            : merged[0] ?? prov.defaultModel;
+
+        setSelectedModel(pick);
+      } catch {
+        // Network error — keep static list
+        const prov = AI_PROVIDERS.find((p) => p.id === pId) ?? AI_PROVIDERS[0];
+        setModels(prov.staticModels);
+        setSelectedModel(loadFromLS(lsModel(pId)) || prov.defaultModel);
+        setModelsWarning("Could not reach provider to fetch latest models.");
+      } finally {
+        setModelsFetching(false);
+      }
+    },
+    []
+  );
+
+  // Seed with static models immediately when provider changes (no flash)
+  const initModels = useCallback(
+    (pId: string, key: string) => {
+      const prov = AI_PROVIDERS.find((p) => p.id === pId) ?? AI_PROVIDERS[0];
+      setModels(prov.staticModels);
+      const saved = loadFromLS(lsModel(pId));
+      setSelectedModel(
+        prov.staticModels.includes(saved) ? saved : prov.defaultModel
+      );
+      setModelsWarning(null);
+
+      if (key.trim()) {
+        // Debounce so rapid typing doesn't spam the API
+        if (fetchDebounceRef.current) clearTimeout(fetchDebounceRef.current);
+        fetchDebounceRef.current = setTimeout(() => {
+          fetchModels(pId, key);
+        }, 400);
+      }
+    },
+    [fetchModels]
+  );
+
+  // Init on first mount
+  useEffect(() => {
+    initModels(providerId, apiKey);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  const handleApiKeyChange = (val: string) => {
-    setApiKey(val);
-    saveApiKey(providerId, val);
+  // ── Switch provider ───────────────────────────────────────────────────────
+  const switchProvider = useCallback(
+    (id: string) => {
+      setProviderId(id);
+      saveToLS(LS_PROVIDER_KEY, id);
+      const key = loadFromLS(lsApiKey(id));
+      setApiKey(key);
+      setError(null);
+      setGeneratedSvg(null);
+      if (!key) setKeyOpen(true);
+      initModels(id, key);
+    },
+    [initModels]
+  );
+
+  // ── API key change ────────────────────────────────────────────────────────
+  const handleApiKeyChange = useCallback(
+    (val: string) => {
+      setApiKey(val);
+      saveToLS(lsApiKey(providerId), val);
+      initModels(providerId, val);
+    },
+    [providerId, initModels]
+  );
+
+  // ── Model change ──────────────────────────────────────────────────────────
+  const handleModelChange = (val: string) => {
+    setSelectedModel(val);
+    saveToLS(lsModel(providerId), val);
   };
 
+  // ── Generate ──────────────────────────────────────────────────────────────
   const generate = async () => {
     const trimmed = prompt.trim();
     if (!trimmed || loading) return;
     if (!apiKey.trim()) {
       setError("Enter your API key above before generating.");
-      setKeySettingsOpen(true);
+      setKeyOpen(true);
       return;
     }
 
@@ -103,11 +234,11 @@ export function AiInput({ onSvgChange, active }: AiInputProps) {
           prompt: trimmed,
           provider: providerId,
           apiKey: apiKey.trim(),
+          model: selectedModel || provider.defaultModel,
         }),
       });
 
       const data = await res.json();
-
       if (!res.ok) {
         setError(data.error ?? "Something went wrong. Please try again.");
         return;
@@ -129,48 +260,48 @@ export function AiInput({ onSvgChange, active }: AiInputProps) {
     }
   };
 
+  // ── Render ────────────────────────────────────────────────────────────────
   return (
     <div className="space-y-3">
-      {/* Provider picker */}
-      <div className="grid grid-cols-5 gap-1">
-        {AI_PROVIDERS.map((p) => (
-          <button
-            key={p.id}
-            onClick={() => switchProvider(p.id)}
-            className={`rounded-md px-1 py-1.5 text-[10px] font-medium transition-colors leading-tight text-center ${
-              p.id === providerId
-                ? "bg-primary text-primary-foreground"
-                : "bg-accent/60 text-muted-foreground hover:text-foreground hover:bg-accent"
-            }`}
-          >
-            {p.label}
-          </button>
-        ))}
+      {/* Provider dropdown */}
+      <div className="space-y-1">
+        <label className="text-[10px] text-muted-foreground uppercase tracking-wide">
+          Provider
+        </label>
+        <select
+          value={providerId}
+          onChange={(e) => switchProvider(e.target.value)}
+          className="w-full h-8 rounded-md border border-input bg-background/50 px-2 text-xs ring-offset-background focus:outline-none focus:ring-1 focus:ring-ring"
+        >
+          {AI_PROVIDERS.map((p) => (
+            <option key={p.id} value={p.id}>
+              {p.name}
+            </option>
+          ))}
+        </select>
+        <p className="text-[10px] text-muted-foreground leading-snug">
+          {provider.tagline}
+        </p>
       </div>
-
-      {/* Provider tagline */}
-      <p className="text-[10px] text-muted-foreground leading-snug -mt-1">
-        {provider.tagline}
-      </p>
 
       {/* API key section */}
       <div className="rounded-md border border-input bg-background/30 overflow-hidden">
         <button
           className="w-full flex items-center gap-2 px-2.5 py-2 text-[11px] text-muted-foreground hover:text-foreground transition-colors"
-          onClick={() => setKeySettingsOpen((v) => !v)}
+          onClick={() => setKeyOpen((v) => !v)}
         >
           <KeyRound className="h-3 w-3 shrink-0" />
           <span className="flex-1 text-left truncate">
             {apiKey ? "API key saved ✓" : "Enter API key"}
           </span>
-          {keySettingsOpen ? (
+          {keyOpen ? (
             <ChevronUp className="h-3 w-3 shrink-0" />
           ) : (
             <ChevronDown className="h-3 w-3 shrink-0" />
           )}
         </button>
 
-        {keySettingsOpen && (
+        {keyOpen && (
           <div className="px-2.5 pb-2.5 space-y-2 border-t border-input">
             <div className="relative mt-2">
               <input
@@ -205,6 +336,50 @@ export function AiInput({ onSvgChange, active }: AiInputProps) {
               <ExternalLink className="h-2.5 w-2.5" />
             </a>
           </div>
+        )}
+      </div>
+
+      {/* Model selector */}
+      <div className="space-y-1">
+        <div className="flex items-center justify-between">
+          <label className="text-[10px] text-muted-foreground uppercase tracking-wide">
+            Model
+          </label>
+          {modelsFetching && (
+            <span className="flex items-center gap-1 text-[10px] text-muted-foreground">
+              <RefreshCw className="h-2.5 w-2.5 animate-spin" />
+              Fetching…
+            </span>
+          )}
+          {!modelsFetching && apiKey && (
+            <button
+              className="text-[10px] text-primary hover:underline"
+              onClick={() => fetchModels(providerId, apiKey)}
+            >
+              Refresh
+            </button>
+          )}
+        </div>
+        <select
+          value={selectedModel}
+          onChange={(e) => handleModelChange(e.target.value)}
+          className="w-full h-8 rounded-md border border-input bg-background/50 px-2 text-xs ring-offset-background focus:outline-none focus:ring-1 focus:ring-ring"
+          disabled={modelsFetching}
+        >
+          {models.map((m) => (
+            <option key={m} value={m}>
+              {m}
+            </option>
+          ))}
+          {/* Always ensure current selection is an option even if not in list */}
+          {selectedModel && !models.includes(selectedModel) && (
+            <option value={selectedModel}>{selectedModel}</option>
+          )}
+        </select>
+        {modelsWarning && (
+          <p className="text-[10px] text-muted-foreground leading-snug">
+            ⚠ {modelsWarning}
+          </p>
         )}
       </div>
 
@@ -261,3 +436,4 @@ export function AiInput({ onSvgChange, active }: AiInputProps) {
     </div>
   );
 }
+
