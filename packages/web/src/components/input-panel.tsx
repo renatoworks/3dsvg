@@ -201,11 +201,7 @@ export function InputPanel({
                 {customSvg.trim().startsWith("<svg") && (
                   <div className="rounded-lg border border-white/[0.06] bg-white p-3 flex items-center justify-center aspect-square overflow-hidden">
                     <img
-                      src={`data:image/svg+xml;base64,${btoa(
-                        new TextEncoder()
-                          .encode(customSvg.trim())
-                          .reduce((s, b) => s + String.fromCharCode(b), "")
-                      )}`}
+                      src={`data:image/svg+xml,${encodeURIComponent(customSvg.trim())}`}
                       alt="SVG preview"
                       className="w-full h-full object-contain"
                     />
