@@ -175,6 +175,9 @@ export default function Home() {
 
   const handleAiSvgChange = useCallback((svg: string) => {
     setAiSvg(svg);
+    // Mirror to code tab so the user can inspect / edit the generated SVG
+    setCustomSvg(svg);
+    setInputTab("code");
   }, []);
 
   // Show SVG from the active tab. When switching to an empty tab,
