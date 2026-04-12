@@ -249,15 +249,14 @@ export function AiInput({ onSvgChange, active }: AiInputProps) {
       )}
 
       {!error && generatedSvg && !loading && (
-        <div
-          className="rounded-lg border border-white/[0.06] bg-white p-3 flex items-center justify-center aspect-square overflow-hidden"
-          dangerouslySetInnerHTML={{
-            __html: generatedSvg.replace(
-              /<svg/,
-              '<svg style="width:100%;height:100%;object-fit:contain;display:block;max-width:100%;max-height:100%"'
-            ),
-          }}
-        />
+        <div className="rounded-lg border border-white/[0.06] bg-white p-3 flex items-center justify-center aspect-square overflow-hidden">
+          {/* Render via data-URI <img> so SVG scripts are fully sandboxed */}
+          <img
+            src={`data:image/svg+xml;base64,${btoa(unescape(encodeURIComponent(generatedSvg)))}`}
+            alt="AI-generated SVG preview"
+            className="w-full h-full object-contain"
+          />
+        </div>
       )}
     </div>
   );

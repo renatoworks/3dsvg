@@ -120,13 +120,35 @@ async function callGemini(
 }
 
 // ---------------------------------------------------------------------------
+// SVG sanitizer (server-side)
+// Strips elements and attributes that can execute code or load external
+// resources before the SVG is sent back to the client.
+// ---------------------------------------------------------------------------
+
+const DANGEROUS_ELEMENTS = /(<script[\s\S]*?<\/script>|<script[^>]*\/>)/gi;
+const DANGEROUS_ATTRS = /\s(on\w+|formaction|action|href\s*=\s*["']?\s*javascript)[^>]*/gi;
+const JAVASCRIPT_URLS = /((href|src|action|xlink:href)\s*=\s*["']\s*javascript:[^"']*["'])/gi;
+const FOREIGN_OBJECT = /<foreignObject[\s\S]*?<\/foreignObject>/gi;
+const USE_EXTERNAL = /<use[^>]+href\s*=\s*["'][^#][^"']*["'][^>]*>/gi;
+
+function sanitizeSvg(svg: string): string {
+  return svg
+    .replace(DANGEROUS_ELEMENTS, "")
+    .replace(FOREIGN_OBJECT, "")
+    .replace(USE_EXTERNAL, "")
+    .replace(JAVASCRIPT_URLS, "")
+    .replace(DANGEROUS_ATTRS, "");
+}
+
+// ---------------------------------------------------------------------------
 // Shared SVG extractor
 // ---------------------------------------------------------------------------
 
 function extractSvg(raw: string): string | null {
   const match = raw.match(/<svg[\s\S]*?<\/svg>/i);
   const svg = match ? match[0] : raw.trim();
-  return svg.startsWith("<svg") ? svg : null;
+  if (!svg.startsWith("<svg")) return null;
+  return sanitizeSvg(svg);
 }
 
 // ---------------------------------------------------------------------------
