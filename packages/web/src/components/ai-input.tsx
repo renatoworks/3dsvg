@@ -34,10 +34,11 @@ import {
   type AiProvider,
 } from "@/lib/ai-providers";
 
+const MODEL_FETCH_DEBOUNCE_MS = 400;
+
 // ---------------------------------------------------------------------------
 // localStorage helpers
 // ---------------------------------------------------------------------------
-
 const LS_PROVIDER_KEY = "ai-provider-id";
 const lsApiKey = (id: string) => `ai-provider-key-${id}`;
 const lsModel = (id: string) => `ai-provider-model-${id}`;
@@ -170,7 +171,7 @@ export function AiInput({ onSvgChange, active }: AiInputProps) {
         if (fetchDebounceRef.current) clearTimeout(fetchDebounceRef.current);
         fetchDebounceRef.current = setTimeout(() => {
           fetchModels(pId, key);
-        }, 400);
+        }, MODEL_FETCH_DEBOUNCE_MS);
       }
     },
     [fetchModels]
@@ -427,7 +428,11 @@ export function AiInput({ onSvgChange, active }: AiInputProps) {
         <div className="rounded-lg border border-white/[0.06] bg-white p-3 flex items-center justify-center aspect-square overflow-hidden">
           {/* Render via data-URI <img> so SVG scripts are fully sandboxed */}
           <img
-            src={`data:image/svg+xml;base64,${btoa(unescape(encodeURIComponent(generatedSvg)))}`}
+            src={`data:image/svg+xml;base64,${btoa(
+              new TextEncoder()
+                .encode(generatedSvg)
+                .reduce((s, b) => s + String.fromCharCode(b), "")
+            )}`}
             alt="AI-generated SVG preview"
             className="w-full h-full object-contain"
           />

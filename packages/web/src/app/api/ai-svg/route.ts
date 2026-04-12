@@ -124,21 +124,42 @@ async function callGemini(
 // SVG sanitizer (server-side)
 // Strips elements and attributes that can execute code or load external
 // resources before the SVG is sent back to the client.
+// Uses multi-pass removal to prevent reconstruction attacks.
 // ---------------------------------------------------------------------------
 
-const DANGEROUS_ELEMENTS = /(<script[\s\S]*?<\/script>|<script[^>]*\/>)/gi;
-const DANGEROUS_ATTRS = /\s(on\w+|formaction|action|href\s*=\s*["']?\s*javascript)[^>]*/gi;
-const JAVASCRIPT_URLS = /((href|src|action|xlink:href)\s*=\s*["']\s*javascript:[^"']*["'])/gi;
-const FOREIGN_OBJECT = /<foreignObject[\s\S]*?<\/foreignObject>/gi;
-const USE_EXTERNAL = /<use[^>]+href\s*=\s*["'][^#][^"']*["'][^>]*>/gi;
+/** Safe model name: only alphanumeric, hyphens, dots, underscores, slashes */
+const SAFE_MODEL_RE = /^[a-zA-Z0-9\-._/]+$/;
 
 function sanitizeSvg(svg: string): string {
-  return svg
-    .replace(DANGEROUS_ELEMENTS, "")
-    .replace(FOREIGN_OBJECT, "")
-    .replace(USE_EXTERNAL, "")
-    .replace(JAVASCRIPT_URLS, "")
-    .replace(DANGEROUS_ATTRS, "");
+  let s = svg;
+
+  // Remove <script …> … </script> in all whitespace/case variations,
+  // including `</script >` (with trailing spaces before `>`).
+  // Run twice to catch nested/reconstructed patterns.
+  for (let i = 0; i < 2; i++) {
+    s = s.replace(/<script\b[\s\S]*?<\/script\s*>/gi, "");
+    s = s.replace(/<script\b[^>]*\/?>/gi, "");
+  }
+
+  // Remove <foreignObject> blocks (can embed HTML)
+  s = s.replace(/<foreignObject\b[\s\S]*?<\/foreignObject\s*>/gi, "");
+
+  // Remove <use> pointing at external resources (not fragment refs)
+  s = s.replace(
+    /<use\b[^>]*?\s(?:xlink:)?href\s*=\s*["'][^#"][^"']*["'][^>]*>/gi,
+    ""
+  );
+
+  // Remove ALL event-handler attributes (on* = "..."), case-insensitive
+  s = s.replace(/\s+on\w+\s*=\s*(?:"[^"]*"|'[^']*'|[^\s>]*)/gi, "");
+
+  // Remove javascript: URLs from href/src/action/xlink:href attributes
+  s = s.replace(
+    /\s*(?:xlink:)?(?:href|src|action)\s*=\s*["']\s*javascript:[^"']*/gi,
+    ""
+  );
+
+  return s;
 }
 
 // ---------------------------------------------------------------------------
@@ -168,7 +189,9 @@ export async function POST(req: NextRequest) {
   const providerId = (body.provider ?? "openai").toString().trim();
   const apiKey = (body.apiKey ?? "").toString().trim();
   // Optional model override — falls back to provider's defaultModel
-  const modelOverride = body.model ? (body.model as string).toString().trim() : null;
+  const rawModel = body.model ? (body.model as string).toString().trim() : null;
+  const modelOverride =
+    rawModel && SAFE_MODEL_RE.test(rawModel) ? rawModel : null;
 
   if (!prompt) {
     return NextResponse.json({ error: "Prompt is required" }, { status: 400 });
