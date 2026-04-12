@@ -27,6 +27,7 @@ import { ExportModal } from "@/components/export-bar";
 import { EmbedDialog } from "@/components/embed-dialog";
 import { DownloadDialog } from "@/components/download-dialog";
 import { Freedback } from "@/components/freedback";
+import { GitHubStarBadge } from "@/components/github-star-badge";
 import {
   defaultTextureSettings,
   defaultMaterialSettings,
@@ -425,20 +426,7 @@ export default function Home() {
         lightSettings={lightSettings}
       />
 
-      {/* Docs badge */}
-      <Button
-        asChild
-        variant="secondary"
-        size="sm"
-        className="fixed bottom-4 right-4 z-10 hidden md:inline-flex rounded-full bg-neutral-900 text-white hover:bg-neutral-800 shadow-md hover:shadow-lg h-8 px-3.5 text-xs font-semibold gap-1"
-      >
-        <a href="https://www.npmjs.com/package/3dsvg" target="_blank" rel="noopener noreferrer">
-          <svg viewBox="0 0 2500 2500" className="h-4 w-4 fill-current">
-            <path d="M1241.5 268.5h-973v1962.9h972.9V763.5h495v1467.9h495V268.5z" />
-          </svg>
-          3dsvg
-        </a>
-      </Button>
+      <GitHubStarBadge />
 
       {/* Export modal */}
       <ExportModal
