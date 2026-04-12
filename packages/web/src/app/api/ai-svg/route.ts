@@ -114,10 +114,16 @@ async function callGemini(
   }
   const data = (await res.json()) as {
     candidates?: Array<{
-      content?: { parts?: Array<{ text?: string }> };
+      content?: { parts?: Array<{ text?: string; thought?: boolean }> };
     }>;
   };
-  return data.candidates?.[0]?.content?.parts?.[0]?.text ?? "";
+  // Thinking models (gemini-2.5+) prepend a {thought: true} part before the
+  // actual response. Find the first non-thought text part so we always get
+  // the real output, not the internal reasoning chain.
+  const parts = data.candidates?.[0]?.content?.parts ?? [];
+  const textPart =
+    parts.find((p) => !p.thought && typeof p.text === "string") ?? parts[0];
+  return textPart?.text ?? "";
 }
 
 // ---------------------------------------------------------------------------
