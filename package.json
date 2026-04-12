@@ -8,7 +8,8 @@
     "dev:engine": "npm --workspace=packages/engine run dev",
     "dev:web": "npm --workspace=packages/web run dev",
     "build": "npm --workspace=packages/engine run build && npm --workspace=packages/web run build",
-    "build:engine": "npm --workspace=packages/engine run build"
+    "build:engine": "npm --workspace=packages/engine run build",
+    "test": "npm --workspace=packages/engine run test"
   },
   "engines": {
     "node": ">=18"
