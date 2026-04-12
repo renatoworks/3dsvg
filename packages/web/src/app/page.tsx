@@ -52,6 +52,7 @@ export default function Home() {
   const [fileSvg, setFileSvg] = useState("");
   const [pixelSvg, setPixelSvg] = useState("");
   const [textSvg, setTextSvg] = useState("");
+  const [aiSvg, setAiSvg] = useState("");
   const [inputTab, setInputTab] = useState("draw");
   const [depth, setDepth] = useState(1);
   const [smoothness, setSmoothness] = useState(0.6);
@@ -172,11 +173,16 @@ export default function Home() {
     setTextSvg(svg);
   }, []);
 
+  const handleAiSvgChange = useCallback((svg: string) => {
+    setAiSvg(svg);
+  }, []);
+
   // Show SVG from the active tab. When switching to an empty tab,
   // keep showing the last non-empty SVG that was displayed.
   const svgByTab: Record<string, string> = {
     text: textSvg,
     draw: pixelSvg,
+    ai: aiSvg,
     code: customSvg.trim(),
     file: fileSvg,
   };
@@ -252,6 +258,7 @@ export default function Home() {
             onFileSvgChange={setFileSvg}
             onPixelSvgChange={handlePixelSvgChange}
             onTextSvgChange={handleTextSvgChange}
+            onAiSvgChange={handleAiSvgChange}
             onTextChange={setCurrentText}
             onFontChange={setCurrentFont}
             initialText={currentText}
