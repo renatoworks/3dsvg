@@ -121,8 +121,7 @@ async function callGemini(
   // actual response. Find the first non-thought text part so we always get
   // the real output, not the internal reasoning chain.
   const parts = data.candidates?.[0]?.content?.parts ?? [];
-  const textPart =
-    parts.find((p) => !p.thought && typeof p.text === "string") ?? parts[0];
+  const textPart = parts.find((p) => !p.thought && typeof p.text === "string");
   return textPart?.text ?? "";
 }
 
