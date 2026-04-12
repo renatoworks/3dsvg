@@ -13,6 +13,10 @@
 import { useRef, useEffect, useState, useCallback } from "react";
 import { useThree } from "@react-three/fiber";
 import * as THREE from "three";
+import { STLExporter } from "three/examples/jsm/exporters/STLExporter.js";
+import { GLTFExporter } from "three/examples/jsm/exporters/GLTFExporter.js";
+import { OBJExporter } from "three/examples/jsm/exporters/OBJExporter.js";
+import { PLYExporter } from "three/examples/jsm/exporters/PLYExporter.js";
 
 import { SVG3D, materialPresets } from "3dsvg";
 import type { AnimationType, MaterialSettings } from "3dsvg";
@@ -20,6 +24,7 @@ import type { AnimationType, MaterialSettings } from "3dsvg";
 import { type TextureSettings } from "@/lib/types";
 
 export type { AnimationType, MaterialSettings };
+export type Export3DFormat = "stl" | "glb" | "obj" | "ply";
 
 // ---------------------------------------------------------------------------
 // Light controls — draggable orb with glow sprite (web-only)
@@ -187,6 +192,98 @@ function DownloadCapture({
 }
 
 // ---------------------------------------------------------------------------
+// Download3DCapture — STL / GLB / OBJ / PLY export (web-only)
+// ---------------------------------------------------------------------------
+
+function triggerDownload(blob: Blob, filename: string) {
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+}
+
+// The engine merges extruded shapes via BufferGeometryUtils.mergeGeometries,
+// which yields a plain BufferGeometry (type === "BufferGeometry"). Scene
+// extras — background plane, light-orb sphere, contact shadows — use
+// subclasses (PlaneGeometry, SphereGeometry, etc.), so matching the base
+// type isolates the user's SVG mesh.
+function collectExtrudedMeshes(scene: THREE.Scene): THREE.Mesh[] {
+  const meshes: THREE.Mesh[] = [];
+  scene.traverse((obj) => {
+    if (!(obj instanceof THREE.Mesh)) return;
+    if (!obj.visible) return;
+    if (obj.geometry?.type !== "BufferGeometry") return;
+    meshes.push(obj);
+  });
+  return meshes;
+}
+
+// Build a detached group containing cloned meshes with world transforms baked
+// into the geometry. Ensures exports look like what the user sees, regardless
+// of camera/animation state.
+function buildExportGroup(scene: THREE.Scene): THREE.Group {
+  const group = new THREE.Group();
+  const meshes = collectExtrudedMeshes(scene);
+  for (const mesh of meshes) {
+    mesh.updateWorldMatrix(true, false);
+    const geometry = mesh.geometry.clone();
+    geometry.applyMatrix4(mesh.matrixWorld);
+    const material = Array.isArray(mesh.material)
+      ? mesh.material.map((m) => m.clone())
+      : mesh.material.clone();
+    group.add(new THREE.Mesh(geometry, material));
+  }
+  return group;
+}
+
+function Download3DCapture({
+  register3DExport,
+}: {
+  register3DExport?: (fn: (format: Export3DFormat, filename?: string) => void) => void;
+}) {
+  const { scene } = useThree();
+
+  useEffect(() => {
+    if (!register3DExport) return;
+    register3DExport((format, filename = "3dsvg") => {
+      const group = buildExportGroup(scene);
+      if (group.children.length === 0) return;
+
+      if (format === "stl") {
+        const result = new STLExporter().parse(group, { binary: true });
+        triggerDownload(new Blob([result], { type: "model/stl" }), `${filename}.stl`);
+      } else if (format === "obj") {
+        const text = new OBJExporter().parse(group);
+        triggerDownload(new Blob([text], { type: "text/plain" }), `${filename}.obj`);
+      } else if (format === "ply") {
+        const result = new PLYExporter().parse(group, () => {}, { binary: true });
+        if (result) {
+          triggerDownload(new Blob([result], { type: "application/octet-stream" }), `${filename}.ply`);
+        }
+      } else if (format === "glb") {
+        new GLTFExporter().parse(
+          group,
+          (result) => {
+            const blob = result instanceof ArrayBuffer
+              ? new Blob([result], { type: "model/gltf-binary" })
+              : new Blob([JSON.stringify(result)], { type: "model/gltf+json" });
+            triggerDownload(blob, `${filename}.glb`);
+          },
+          (err) => console.error("GLTF export failed", err),
+          { binary: true }
+        );
+      }
+    });
+  }, [scene, register3DExport]);
+
+  return null;
+}
+
+// ---------------------------------------------------------------------------
 // SVGTo3DCanvas — main exported component
 // ---------------------------------------------------------------------------
 
@@ -232,6 +329,7 @@ interface SVGTo3DCanvasProps {
   showLightHelper: boolean;
   registerCapture?: (fn: (resolution: number, withBackground: boolean, onCapture: (dataUrl: string) => void, aspectRatio?: number | null) => void) => void;
   registerCanvas?: (canvas: HTMLCanvasElement) => void;
+  register3DExport?: (fn: (format: Export3DFormat, filename?: string) => void) => void;
 }
 
 export function SVGTo3DCanvas({
@@ -258,6 +356,7 @@ export function SVGTo3DCanvas({
   showLightHelper,
   registerCapture,
   registerCanvas,
+  register3DExport,
 }: SVGTo3DCanvasProps) {
   const shadowRef = useRef<THREE.Group>(null);
   const lightOrbRef = useRef<THREE.Group>(null);
@@ -336,6 +435,9 @@ export function SVGTo3DCanvas({
         lightOrbRef={lightOrbRef}
         bgPlaneRef={bgPlaneRef}
       />
+
+      {/* 3D model export — STL / GLB / OBJ / PLY */}
+      <Download3DCapture register3DExport={register3DExport} />
 
       {/* Light position indicator */}
       <group ref={lightOrbRef}>

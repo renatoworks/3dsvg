@@ -12,8 +12,8 @@
 import { useState, useCallback, useRef, useEffect } from "react";
 import dynamic from "next/dynamic";
 import { motion } from "framer-motion";
-import { Settings2, CodeXml, MessageCircle } from "lucide-react";
-import { defaultLightSettings, type LightSettings } from "@/components/svg-to-3d-canvas";
+import { Settings2, CodeXml, MessageCircle, Download } from "lucide-react";
+import { defaultLightSettings, type LightSettings, type Export3DFormat } from "@/components/svg-to-3d-canvas";
 import { AnimatePresence } from "framer-motion";
 import { Button } from "@/components/ui/button";
 import {
@@ -25,6 +25,7 @@ import { InputPanel } from "@/components/input-panel";
 import { ControlsPanel } from "@/components/controls-panel";
 import { ExportModal } from "@/components/export-bar";
 import { EmbedDialog } from "@/components/embed-dialog";
+import { DownloadDialog } from "@/components/download-dialog";
 import { Freedback } from "@/components/freedback";
 import {
   defaultTextureSettings,
@@ -61,6 +62,7 @@ export default function Home() {
   const [materialSettings, setMaterialSettings] =
     useState<MaterialSettings>(defaultMaterialSettings);
   const captureFnRef = useRef<((resolution: number, withBackground: boolean, onCapture: (dataUrl: string) => void, aspectRatio?: number | null) => void) | null>(null);
+  const export3DFnRef = useRef<((format: Export3DFormat, filename?: string) => void) | null>(null);
   const [controlsOpen, setControlsOpen] = useState(false);
   const [topPanel, setTopPanel] = useState<"toolbar" | "settings">("toolbar");
   const [lightingOpen, setLightingOpen] = useState(false);
@@ -79,6 +81,7 @@ export default function Home() {
   const [currentText, setCurrentText] = useState("3DSVG");
   const [currentFont, setCurrentFont] = useState("Rubik Mono One");
   const [embedOpen, setEmbedOpen] = useState(false);
+  const [downloadOpen, setDownloadOpen] = useState(false);
   const [feedbackOpen, setFeedbackOpen] = useState(false);
 
   // --- Export bar ---
@@ -93,6 +96,15 @@ export default function Home() {
   const registerCanvas = useCallback((canvas: HTMLCanvasElement) => {
     canvasRef.current = canvas;
   }, []);
+
+  const register3DExport = useCallback((fn: (format: Export3DFormat, filename?: string) => void) => {
+    export3DFnRef.current = fn;
+  }, []);
+
+  const handle3DExport = useCallback((format: Export3DFormat) => {
+    const base = inputTab === "text" && currentText ? currentText.replace(/[^a-z0-9]+/gi, "-").toLowerCase() || "3dsvg" : "3dsvg";
+    export3DFnRef.current?.(format, base);
+  }, [inputTab, currentText]);
 
   // --- Drag-and-drop SVG ---
   const [isDragging, setIsDragging] = useState(false);
@@ -202,6 +214,7 @@ export default function Home() {
           showLightHelper={controlsOpen && lightingOpen}
           registerCapture={registerCapture}
           registerCanvas={registerCanvas}
+          register3DExport={register3DExport}
         />
       </div>
 
@@ -249,7 +262,7 @@ export default function Home() {
       </div>
 
       {/* Top-right: embed + gear buttons */}
-      <div className={`pointer-events-auto absolute top-5 right-5 flex gap-2 ${topPanel === "settings" ? "z-20" : "z-[8]"}`}>
+      <div className={`pointer-events-auto absolute top-5 right-5 flex gap-2 ${topPanel === "settings" ? "z-[60]" : "z-[8]"}`}>
         <Tooltip>
           <TooltipTrigger asChild>
             <Button
@@ -262,6 +275,19 @@ export default function Home() {
             </Button>
           </TooltipTrigger>
           <TooltipContent side="bottom">Feedback</TooltipContent>
+        </Tooltip>
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <Button
+              variant="ghost"
+              size="icon"
+              onClick={() => setDownloadOpen(true)}
+              className="rounded-full bg-card/70 backdrop-blur-xl border border-white/[0.06] shadow-[0_8px_32px_oklch(0_0_0/0.4)] h-10 w-10"
+            >
+              <Download className="h-4 w-4" />
+            </Button>
+          </TooltipTrigger>
+          <TooltipContent side="bottom">Download 3D</TooltipContent>
         </Tooltip>
         <Tooltip>
           <TooltipTrigger asChild>
@@ -301,7 +327,7 @@ export default function Home() {
           : { opacity: 0, x: 20, pointerEvents: "none" as const }
         }
         transition={{ duration: 0.2 }}
-        className={`absolute top-5 right-5 bottom-5 max-md:left-5 ${topPanel === "settings" ? "z-20" : "z-[8]"}`}
+        className={`absolute top-5 right-5 bottom-5 max-md:left-5 ${topPanel === "settings" ? "z-[60]" : "z-[8]"}`}
       >
             <ControlsPanel
               depth={depth}
@@ -364,6 +390,13 @@ export default function Home() {
 
       {/* Feedback widget */}
       <Freedback storage="email" open={feedbackOpen} onOpenChange={setFeedbackOpen} hideButton />
+
+      {/* Download dialog */}
+      <DownloadDialog
+        open={downloadOpen}
+        onOpenChange={setDownloadOpen}
+        onDownload={handle3DExport}
+      />
 
       {/* Embed dialog */}
       <EmbedDialog

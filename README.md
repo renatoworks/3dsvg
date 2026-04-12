@@ -14,7 +14,7 @@ This is a monorepo with two packages:
 | Package | Description |
 |---------|-------------|
 | [`packages/engine`](packages/engine/) | Embeddable `<SVG3D>` React component — published to npm as [`3dsvg`](https://www.npmjs.com/package/3dsvg) |
-| [`packages/web`](packages/web/) | Visual editor at [3dsvg.design](https://3dsvg.design) — design 3D objects and export as images, video, or embed code |
+| [`packages/web`](packages/web/) | Visual editor at [3dsvg.design](https://3dsvg.design) — design 3D objects and export as images, video, 3D models, or embed code |
 
 The web editor renders the engine's `<SVG3D>` component directly — what you see in the editor is exactly what you get with the embed.
 
@@ -52,6 +52,7 @@ See the full [engine docs](packages/engine/README.md) for all props.
 - **Configurable lighting** — Key light position/intensity, ambient, shadows
 - **PNG export** — Transparent or with background, up to 4K resolution
 - **Video export** — 60fps capture with iOS-style trim UI, MP4 (via FFmpeg WASM) or WebM, quality control
+- **3D model export** — Download the scene as GLB (color + materials preserved), STL (3D printing), OBJ, or PLY
 - **Camera mode** — iPhone-style shutter button, aspect ratio picker, viewfinder overlay
 - **Interactive canvas** — Drag rotation with momentum, scroll zoom, cursor-follow orbit
 - **Responsive** — Auto-zooms on narrow/portrait viewports to keep the 3D object visible

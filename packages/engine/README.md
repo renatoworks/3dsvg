@@ -175,7 +175,7 @@ Geometry processing is asynchronous — complex SVGs are processed in batches to
 
 ```tsx
 <SVG3D
-  svgString={complexSvg}
+  svg={complexSvg}
   onLoadingChange={(loading, progress) => {
     if (loading) console.log(`Processing: ${progress}%`);
     else console.log("Done");

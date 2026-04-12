@@ -11,7 +11,7 @@ GitHub: https://github.com/renatoworks/3dsvg
 This is an npm workspaces monorepo with two packages:
 
 - packages/engine — The `<SVG3D>` React component, published to npm as "3dsvg". Renders extruded 3D objects from SVGs or text with PBR materials, textures, animations, configurable lighting, and shadows.
-- packages/web — Next.js visual editor at 3dsvg.design. Renders the engine's `<SVG3D>` component directly — what users see in the editor is exactly what they get with the embed. Adds export (PNG up to 4K, video MP4/WebM), draggable light controls, and a background plane.
+- packages/web — Next.js visual editor at 3dsvg.design. Renders the engine's `<SVG3D>` component directly — what users see in the editor is exactly what they get with the embed. Adds export (PNG up to 4K; video MP4/WebM; 3D model as GLB/STL/OBJ/PLY), draggable light controls, and a background plane.
 
 ## Install (embed)
 
@@ -32,13 +32,14 @@ const SVG3D = dynamic(
 
 ## Component: SVG3D
 
-Renders a single 3D object. Provide either `text` or `svgString` as content.
+Renders a single 3D object. Provide either `text` or `svg` as content.
 
 ### Content props (provide one)
 
 - text: string — Text to render in 3D.
 - font: string — Google Font name. Default: "DM Sans". Available: "DM Sans", "Bebas Neue", "Playfair Display", "Righteous", "Black Ops One", "Permanent Marker", "Rubik Mono One", "Pacifico", "Oswald", "Archivo Black".
-- svgString: string — Raw SVG markup. Paths must have a non-none fill.
+- svg: string — Raw SVG markup or a URL (absolute or path). URLs are fetched automatically. Paths must have a non-none fill.
+- svgString: string — Deprecated. Same as `svg`; kept for back-compat.
 
 ### Shape props
 
@@ -130,7 +131,7 @@ Chrome spinning text:
 
 Gold floating SVG with texture:
 <SVG3D
-  svgString='<svg viewBox="0 0 24 24"><path d="M12 21.35l-1.45-1.32..." fill="black"/></svg>'
+  svg='<svg viewBox="0 0 24 24"><path d="M12 21.35l-1.45-1.32..." fill="black"/></svg>'
   material="gold"
   animate="float"
   texture="https://example.com/marble.jpg"

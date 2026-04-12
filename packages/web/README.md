@@ -29,6 +29,7 @@ The web editor imports the engine as a workspace dependency (`"3dsvg": "file:../
 - **Configurable lighting** — Key light position/intensity, ambient, shadows
 - **PNG export** — Transparent or with background, up to 4K resolution
 - **Video export** — 60fps capture with iOS-style trim UI, MP4 (via FFmpeg WASM) or WebM
+- **3D model export** — Download the scene as GLB (preserves color + materials), STL (for 3D printing), OBJ, or PLY
 - **Camera mode** — iPhone-style shutter button, aspect ratio picker, viewfinder overlay
 - **Interactive canvas** — Drag rotation with momentum, scroll zoom, cursor-follow orbit
 - **Embed code export** — Copy-ready `<SVG3D>` JSX snippet with all props from the current editor state
