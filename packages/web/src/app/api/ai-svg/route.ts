@@ -29,7 +29,8 @@ Rules:
 - Keep the design simple, bold, and recognizable — think app icon or logo silhouette.
 - Center the shape within the viewBox with reasonable padding (~10px on each side).
 - Prefer a single compound <path> or a small number of <path> elements.
-- Do NOT include any <text> elements.`;
+- Do NOT include any <text> elements.
+- The complete SVG must be fully closed — always end with </svg>.`;
 
 const USER_MSG = (prompt: string) => `Generate an SVG icon for: ${prompt}`;
 
@@ -52,7 +53,7 @@ async function callOpenAICompat(
       { role: "system", content: SYSTEM_PROMPT },
       { role: "user", content: USER_MSG(prompt) },
     ],
-    max_tokens: 2048,
+    // No max_tokens cap — let the provider use its full output window
     temperature: 0.7,
   });
   return completion.choices[0]?.message?.content ?? "";
@@ -72,7 +73,8 @@ async function callAnthropic(
     },
     body: JSON.stringify({
       model,
-      max_tokens: 2048,
+      // Anthropic requires max_tokens; use their per-model ceiling
+      max_tokens: 64000,
       system: SYSTEM_PROMPT,
       messages: [{ role: "user", content: USER_MSG(prompt) }],
     }),
@@ -102,7 +104,8 @@ async function callGemini(
     body: JSON.stringify({
       systemInstruction: { parts: [{ text: SYSTEM_PROMPT }] },
       contents: [{ role: "user", parts: [{ text: USER_MSG(prompt) }] }],
-      generationConfig: { maxOutputTokens: 2048, temperature: 0.7 },
+      // No maxOutputTokens — use the model's maximum output window
+      generationConfig: { temperature: 0.7 },
     }),
   });
   if (!res.ok) {
@@ -114,10 +117,15 @@ async function callGemini(
   }
   const data = (await res.json()) as {
     candidates?: Array<{
-      content?: { parts?: Array<{ text?: string }> };
+      content?: { parts?: Array<{ text?: string; thought?: boolean }> };
     }>;
   };
-  return data.candidates?.[0]?.content?.parts?.[0]?.text ?? "";
+  // Thinking models (gemini-2.5+) prepend a {thought: true} part before the
+  // actual response. Find the first non-thought text part so we always get
+  // the real output, not the internal reasoning chain.
+  const parts = data.candidates?.[0]?.content?.parts ?? [];
+  const textPart = parts.find((p) => p.thought !== true && typeof p.text === "string");
+  return textPart?.text ?? "";
 }
 
 // ---------------------------------------------------------------------------
@@ -166,11 +174,47 @@ function sanitizeSvg(svg: string): string {
 // Shared SVG extractor
 // ---------------------------------------------------------------------------
 
+/**
+ * Attempt to repair a truncated SVG.
+ *
+ * When a model hits its output-token limit it stops mid-generation, often
+ * leaving an unclosed <path d="…" or open <g> groups. This function:
+ *  1. Trims to the last complete tag boundary (last `>`)
+ *  2. Closes any unclosed <g> groups
+ *  3. Appends </svg> if missing
+ */
+function repairTruncatedSvg(svg: string): string {
+  // Already complete
+  if (/<\/svg\s*>/i.test(svg)) return svg;
+
+  // Trim to the last complete tag (avoids partial attribute text)
+  const lastGt = svg.lastIndexOf(">");
+  let s = lastGt !== -1 ? svg.slice(0, lastGt + 1) : svg;
+
+  // Balance open <g …> / </g> pairs, excluding self-closing <g ... />
+  const openGs =
+    (s.match(/<g[\s>][^>]*(?<!\/\s*)>/gi) ?? []).length -
+    (s.match(/<\/g\s*>/gi) ?? []).length;
+  for (let i = 0; i < Math.max(0, openGs); i++) s += "</g>";
+
+  s += "</svg>";
+  return s;
+}
+
 function extractSvg(raw: string): string | null {
-  const match = raw.match(/<svg[\s\S]*?<\/svg>/i);
-  const svg = match ? match[0] : raw.trim();
-  if (!svg.startsWith("<svg")) return null;
-  return sanitizeSvg(svg);
+  // Try to find a complete <svg>…</svg> block first (non-greedy: stop at first </svg>)
+  const completeMatch = raw.match(/<svg[\s\S]*?<\/svg>/i);
+  if (completeMatch) return sanitizeSvg(completeMatch[0]);
+
+  // Fall back: find the start of an SVG even if truncated
+  const svgStart = raw.search(/<svg[\s\S]/i);
+  if (svgStart === -1) return null;
+
+  const partial = raw.slice(svgStart).trim();
+  if (!partial.startsWith("<svg")) return null;
+
+  // Attempt structural repair before sanitizing
+  return sanitizeSvg(repairTruncatedSvg(partial));
 }
 
 // ---------------------------------------------------------------------------
