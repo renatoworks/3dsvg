@@ -11,7 +11,7 @@
  */
 
 import { useState, useEffect } from "react";
-import opentype from "opentype.js";
+import * as opentype from "opentype.js";
 
 const FONTS = [
   { name: "DM Sans", url: "https://fonts.gstatic.com/s/dmsans/v17/rP2tp2ywxg089UriI5-g4vlH9VoD8CmcqZG40F9JadbnoEwARZthTg.ttf" },
