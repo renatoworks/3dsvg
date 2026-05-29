@@ -91,6 +91,14 @@ export function InputPanel({
     }
   }, [droppedFile]);
 
+  // Render the uploaded SVG preview as an inert image. Encoding the markup as a
+  // data URL and rendering it via <img> means the browser treats it as a static
+  // image — embedded scripts and event-handler attributes never execute — so an
+  // untrusted upload can't run JavaScript in the editor's origin.
+  const previewUrl = uploadedSvgContent
+    ? `data:image/svg+xml;utf8,${encodeURIComponent(uploadedSvgContent)}`
+    : null;
+
   // Close panel when clicking outside
   useEffect(() => {
     if (!expanded) return;
@@ -195,10 +203,11 @@ export function InputPanel({
             <div className={inputTab === "file" ? "" : "hidden"}>
               {uploadedFileName ? (
                 <div className="space-y-3">
-                  {uploadedSvgContent && (
-                    <div
-                      className="rounded-lg border border-white/[0.06] bg-white p-4 flex items-center justify-center aspect-square overflow-hidden"
-                      dangerouslySetInnerHTML={{ __html: uploadedSvgContent.replace(/<svg/, '<svg style="width:100%;height:100%;object-fit:contain;display:block;max-width:100%;max-height:100%"') }}
+                  {previewUrl && (
+                    <img
+                      src={previewUrl}
+                      alt={uploadedFileName}
+                      className="rounded-lg border border-white/[0.06] bg-white p-4 aspect-square w-full object-contain block"
                     />
                   )}
                   <div className="flex items-center gap-3 rounded-md border border-input p-3">
