@@ -35,6 +35,13 @@ function escapeHtml(value: string): string {
     .replace(/'/g, "&#39;");
 }
 
+// Format a viewport dimension from the unvalidated body, falling back to "?"
+// for non-numeric values so the email never shows "NaN".
+function formatDimension(value: unknown): string {
+  const n = Number(value);
+  return Number.isFinite(n) ? String(n) : "?";
+}
+
 // Accept a URL only if it parses and uses an http(s) scheme. Returns null for
 // anything else (e.g. javascript:/data:) so it never reaches an href attribute.
 function safeHttpUrl(value: string | undefined): string | null {
@@ -77,7 +84,7 @@ function generateEmailTemplate(data: EmailTemplateData): string {
           <div><span style="color: #6b7280;">🔗 </span>${urlMarkup}</div>
           ${location ? `<div><span style="color: #6b7280;">🌍 </span><span>${escapeHtml(location.city)}, ${escapeHtml(location.country)} (${escapeHtml(location.timezone)})</span></div>` : ""}
           ${platform ? `<div><span style="color: #6b7280;">🖥️ </span><span>${escapeHtml(platform)}</span></div>` : ""}
-          ${viewport ? `<div><span style="color: #6b7280;">📱 </span><span>${Number(viewport.width)}×${Number(viewport.height)}</span></div>` : ""}
+          ${viewport ? `<div><span style="color: #6b7280;">📱 </span><span>${formatDimension(viewport.width)}×${formatDimension(viewport.height)}</span></div>` : ""}
         </div>
       </div>
       <div style="margin-top: 24px; padding-top: 16px; border-top: 1px solid #e2e8f0; font-size: 12px; color: #9ca3af; text-align: center;">
@@ -92,8 +99,96 @@ const notificationEmail = process.env.FREEDBACK_EMAIL_NOTIFICATION;
 const fromEmail = process.env.FREEDBACK_EMAIL_FROM;
 const resend = resendApiKey ? new Resend(resendApiKey) : null;
 
+// Extra origins explicitly trusted to submit feedback (comma-separated), in
+// addition to the deployment's own origin. Optional — only needed when the
+// widget is embedded on a different domain.
+const extraAllowedOrigins = (process.env.ALLOWED_ORIGINS ?? "")
+  .split(",")
+  .map((origin) => origin.trim())
+  .filter(Boolean);
+
+function hostOf(url: string): string | null {
+  try {
+    return new URL(url).host;
+  } catch {
+    return null;
+  }
+}
+
+// Allow a request only when it comes from the deployment's own site (its Origin,
+// or Referer as a fallback since some browsers omit Origin on same-origin
+// requests) or from an explicitly trusted origin. Deriving the expected host
+// from the request itself means forks and preview deployments work with no
+// configuration, while cross-site and unattributed POSTs are rejected. Hosts
+// are compared (scheme/port included) to stay robust across http/https.
+function isAllowedRequest(req: NextRequest): boolean {
+  const ownHost = req.headers.get("host");
+  const source = req.headers.get("origin") ?? req.headers.get("referer");
+  if (!ownHost || !source) return false;
+
+  const sourceHost = hostOf(source);
+  if (!sourceHost) return false;
+  if (sourceHost === ownHost) return true;
+  return extraAllowedOrigins.some((origin) => hostOf(origin) === sourceHost);
+}
+
+// Lightweight per-IP rate limit. This is per-instance memory, so it is a
+// deterrent against casual spam / cost amplification rather than a hard global
+// guarantee; move to a durable store (e.g. Redis) if real abuse appears.
+const RATE_LIMIT_MAX = 5;
+const RATE_LIMIT_WINDOW_MS = 60_000;
+const RATE_LIMIT_MAX_ENTRIES = 1000;
+const rateLimitHits = new Map<string, { count: number; resetAt: number }>();
+
+function isRateLimited(key: string): boolean {
+  const now = Date.now();
+  const entry = rateLimitHits.get(key);
+
+  if (!entry || now > entry.resetAt) {
+    // Opportunistically drop expired entries so the map stays bounded.
+    if (rateLimitHits.size > RATE_LIMIT_MAX_ENTRIES) {
+      for (const [k, v] of rateLimitHits) {
+        if (now > v.resetAt) rateLimitHits.delete(k);
+      }
+    }
+    rateLimitHits.set(key, { count: 1, resetAt: now + RATE_LIMIT_WINDOW_MS });
+    return false;
+  }
+
+  if (entry.count >= RATE_LIMIT_MAX) return true;
+  entry.count++;
+  return false;
+}
+
 export async function POST(req: NextRequest) {
-  const { content, email, emoji, metadata } = await req.json();
+  if (!isAllowedRequest(req)) {
+    return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+  }
+
+  // Prefer x-real-ip: on Vercel the edge sets it to the true client IP, so it
+  // can't be spoofed by a client-supplied header the way the first
+  // x-forwarded-for entry can. Fall back to x-forwarded-for for other hosts.
+  const clientIp =
+    req.headers.get("x-real-ip")?.trim() ||
+    req.headers.get("x-forwarded-for")?.split(",")[0]?.trim() ||
+    "unknown";
+  if (isRateLimited(clientIp)) {
+    return NextResponse.json({ error: "Too many requests" }, { status: 429 });
+  }
+
+  let body: {
+    content?: string;
+    email?: string;
+    emoji?: string;
+    metadata?: Metadata;
+  };
+  try {
+    body = await req.json();
+  } catch {
+    return NextResponse.json({ error: "Invalid JSON" }, { status: 400 });
+  }
+
+  const { content, email, emoji, metadata } = body;
 
   if (!content || content.trim().length === 0) {
     return NextResponse.json({ error: "Content is required" }, { status: 400 });
