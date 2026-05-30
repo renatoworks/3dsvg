@@ -25,9 +25,13 @@ interface EmailTemplateData {
 
 // Escape user-controlled values before interpolating them into the email HTML,
 // so submitted content can't inject markup (tracking pixels, deceptive links,
-// layout spoofing) into the notification email.
-function escapeHtml(value: string): string {
-  return value
+// layout spoofing) into the notification email. Accepts unknown so non-string
+// fields from a malformed body coerce to "" instead of throwing a TypeError
+// inside the resend try/catch (which would otherwise silently drop the email
+// while still returning success to the client).
+function escapeHtml(value: unknown): string {
+  const s = typeof value === "string" ? value : "";
+  return s
     .replace(/&/g, "&amp;")
     .replace(/</g, "&lt;")
     .replace(/>/g, "&gt;")
@@ -190,7 +194,10 @@ export async function POST(req: NextRequest) {
 
   const { content, email, emoji, metadata } = body;
 
-  if (!content || content.trim().length === 0) {
+  // Reject non-string content with the same 400 the empty-content path returns,
+  // so a malformed body (e.g. content: {}) doesn't crash the route via
+  // ({}).trim() throwing a TypeError outside the resend try/catch.
+  if (typeof content !== "string" || content.trim().length === 0) {
     return NextResponse.json({ error: "Content is required" }, { status: 400 });
   }
 
