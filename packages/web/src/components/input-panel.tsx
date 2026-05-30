@@ -19,6 +19,7 @@ import {
   Code,
   FileCheck,
   X,
+  Sparkles,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
@@ -28,6 +29,7 @@ import {
 } from "@/components/ui/tooltip";
 import { PixelEditor } from "@/components/pixel-editor";
 import { TextInput } from "@/components/text-input";
+import { AiInput } from "@/components/ai-input";
 
 interface InputPanelProps {
   inputTab: string;
@@ -37,6 +39,7 @@ interface InputPanelProps {
   onFileSvgChange: (svg: string) => void;
   onPixelSvgChange: (svg: string) => void;
   onTextSvgChange: (svg: string) => void;
+  onAiSvgChange: (svg: string) => void;
   onTextChange?: (text: string) => void;
   onFontChange?: (font: string) => void;
   initialText?: string;
@@ -47,6 +50,7 @@ interface InputPanelProps {
 const tabs = [
   { value: "draw", icon: Pencil, label: "Draw" },
   { value: "text", icon: Type, label: "Text" },
+  { value: "ai", icon: Sparkles, label: "AI Generate" },
   { value: "code", icon: Code, label: "SVG Code" },
   { value: "file", icon: FileUp, label: "Upload File" },
 ];
@@ -65,6 +69,7 @@ export function InputPanel({
   onFileSvgChange,
   onPixelSvgChange,
   onTextSvgChange,
+  onAiSvgChange,
   onTextChange,
   onFontChange,
   initialText,
@@ -180,6 +185,9 @@ export function InputPanel({
             <div className={inputTab === "text" ? "" : "hidden"}>
               <TextInput onSvgChange={onTextSvgChange} onTextChange={onTextChange} onFontChange={onFontChange} initialText={initialText} initialFont={initialFont} active={inputTab === "text" && expanded} />
             </div>
+            <div className={inputTab === "ai" ? "" : "hidden"}>
+              <AiInput onSvgChange={onAiSvgChange} active={inputTab === "ai" && expanded} />
+            </div>
             <div className={inputTab === "code" ? "" : "hidden"}>
               <div className="space-y-2">
                 <textarea
@@ -197,6 +205,15 @@ export function InputPanel({
                   >
                     Load example (star)
                   </Button>
+                )}
+                {customSvg.trim().startsWith("<svg") && (
+                  <div className="rounded-lg border border-white/[0.06] bg-white p-3 flex items-center justify-center aspect-square overflow-hidden">
+                    <img
+                      src={`data:image/svg+xml,${encodeURIComponent(customSvg.trim())}`}
+                      alt="SVG preview"
+                      className="w-full h-full object-contain"
+                    />
+                  </div>
                 )}
               </div>
             </div>
