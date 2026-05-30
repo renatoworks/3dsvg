@@ -39,6 +39,45 @@ function escapeHtml(value: unknown): string {
     .replace(/'/g, "&#39;");
 }
 
+// Per-field size caps applied to inputs before they reach the notification
+// email. content rejects at the POST handler (400 so the caller can correct);
+// optional fields silently truncate here so a malformed or excessively
+// chatty browser metadata payload still produces a bounded notification
+// email rather than dropping the feedback or shipping a multi-MB HTML body
+// to Resend.
+const MAX_CONTENT_LENGTH = 10_000;
+const MAX_EMAIL_LENGTH = 254;       // RFC 5321 §4.5.3.1 maximum email length
+const MAX_EMOJI_LENGTH = 32;        // Unicode code points; bounds subject/body display
+const MAX_URL_LENGTH = 2048;
+const MAX_METADATA_STRING_LENGTH = 64;
+
+// Coerce non-string to "" and truncate to `max` characters. Used together
+// with escapeHtml so an oversized or malformed body field renders as a
+// bounded, safe value in the notification email.
+function clampString(value: unknown, max: number): string {
+  if (typeof value !== "string") return "";
+  return value.length > max ? value.slice(0, max) : value;
+}
+
+// Like clampString but counts Unicode code points instead of UTF-16 code
+// units. Used for emoji fields (including ZWJ sequences) so truncation
+// can't leave a dangling lone surrogate, and the cap reflects user-visible
+// characters more closely without pulling in grapheme-cluster parsing.
+function clampCodePoints(value: unknown, max: number): string {
+  if (typeof value !== "string") return "";
+  return Array.from(value).slice(0, max).join("");
+}
+
+// Build the dynamic suffix for the email subject line. Subject lines are
+// header values, not HTML, so we strip CR/LF (which some MTAs would
+// otherwise parse as additional headers) and other ASCII control
+// characters instead of escaping for HTML.
+function sanitizeSubjectSuffix(value: unknown, max: number): string {
+  return clampCodePoints(value, max)
+    .replace(/[\r\n]+/g, " ")
+    .replace(/[\u0000-\u001F\u007F]/g, "");
+}
+
 // Format a viewport dimension from the unvalidated body, falling back to "?"
 // for non-numeric values so the email never shows "NaN".
 function formatDimension(value: unknown): string {
@@ -61,12 +100,37 @@ function safeHttpUrl(value: string | undefined): string | null {
 function generateEmailTemplate(data: EmailTemplateData): string {
   const { content, email, emoji, metadata } = data;
 
+  // Clamp optional user-controlled fields once at the top so every
+  // interpolation site below renders bounded output. content is already
+  // length-checked in the POST handler.
+  const safeEmail = clampString(email, MAX_EMAIL_LENGTH);
+  const safeEmoji = clampCodePoints(emoji, MAX_EMOJI_LENGTH);
+  const safePlatform = clampString(metadata?.browser?.platform, MAX_METADATA_STRING_LENGTH);
+
   const location = metadata?.context?.location;
   const viewport = metadata?.browser?.viewport;
-  const platform = metadata?.browser?.platform;
 
-  const rawUrl = metadata?.context?.url;
-  const safeUrl = safeHttpUrl(rawUrl);
+  // Pre-compute the location pieces and assemble them without dangling
+  // punctuation when any piece is missing or non-string. Only render the
+  // location row when at least one piece is present.
+  const safeCity = clampString(location?.city, MAX_METADATA_STRING_LENGTH);
+  const safeCountry = clampString(location?.country, MAX_METADATA_STRING_LENGTH);
+  const safeTimezone = clampString(location?.timezone, MAX_METADATA_STRING_LENGTH);
+  const hasLocation = Boolean(safeCity || safeCountry || safeTimezone);
+  const cityCountry = [safeCity, safeCountry].filter(Boolean).join(", ");
+  const locationDisplay = cityCountry
+    ? (safeTimezone ? `${cityCountry} (${safeTimezone})` : cityCountry)
+    : safeTimezone;
+
+  // Non-string url becomes "" (so "Unknown" renders); URLs longer than
+  // MAX_URL_LENGTH are shown truncated as plain text rather than as a
+  // clickable link, so a maliciously crafted long URL can't slip past
+  // safeHttpUrl()'s scheme check via mid-URL truncation.
+  const submittedUrl =
+    typeof metadata?.context?.url === "string" ? metadata.context.url : "";
+  const urlTooLong = submittedUrl.length > MAX_URL_LENGTH;
+  const rawUrl = clampString(submittedUrl, MAX_URL_LENGTH);
+  const safeUrl = urlTooLong ? null : safeHttpUrl(rawUrl);
   const urlLabel = escapeHtml(rawUrl || "Unknown");
   const urlMarkup = safeUrl
     ? `<a href="${escapeHtml(safeUrl)}" style="color: #374151; text-decoration: none;">${urlLabel}</a>`
@@ -77,17 +141,17 @@ function generateEmailTemplate(data: EmailTemplateData): string {
       <h2 style="color: #374151; margin-bottom: 24px;">New Feedback Received</h2>
       <div style="background: #f8fafc; padding: 16px; border-radius: 8px; margin-bottom: 20px;">
         <div style="font-size: 18px; font-weight: 600; margin-bottom: 8px;">
-          ${escapeHtml(emoji || "💬")} ${escapeHtml(content)}
+          ${escapeHtml(safeEmoji || "💬")} ${escapeHtml(content)}
         </div>
-        ${email ? `<div style="color: #64748b; font-size: 14px;">From: ${escapeHtml(email)}</div>` : ""}
+        ${safeEmail ? `<div style="color: #64748b; font-size: 14px;">From: ${escapeHtml(safeEmail)}</div>` : ""}
       </div>
       <div style="border-top: 1px solid #e2e8f0; padding-top: 16px;">
         <h3 style="color: #374151; font-size: 14px; margin-bottom: 12px; text-transform: uppercase; letter-spacing: 0.05em;">Context</h3>
         <div style="display: grid; gap: 8px; font-size: 14px;">
           <div><span style="color: #6b7280;">🕒 </span><span>${new Date().toLocaleString()}</span></div>
           <div><span style="color: #6b7280;">🔗 </span>${urlMarkup}</div>
-          ${location ? `<div><span style="color: #6b7280;">🌍 </span><span>${escapeHtml(location.city)}, ${escapeHtml(location.country)} (${escapeHtml(location.timezone)})</span></div>` : ""}
-          ${platform ? `<div><span style="color: #6b7280;">🖥️ </span><span>${escapeHtml(platform)}</span></div>` : ""}
+          ${hasLocation ? `<div><span style="color: #6b7280;">🌍 </span><span>${escapeHtml(locationDisplay)}</span></div>` : ""}
+          ${safePlatform ? `<div><span style="color: #6b7280;">🖥️ </span><span>${escapeHtml(safePlatform)}</span></div>` : ""}
           ${viewport ? `<div><span style="color: #6b7280;">📱 </span><span>${formatDimension(viewport.width)}×${formatDimension(viewport.height)}</span></div>` : ""}
         </div>
       </div>
@@ -200,13 +264,28 @@ export async function POST(req: NextRequest) {
   if (typeof content !== "string" || content.trim().length === 0) {
     return NextResponse.json({ error: "Content is required" }, { status: 400 });
   }
+  // Cap content length so a single submission can't produce a multi-MB
+  // HTML email after escaping. 10k characters fits any legitimate feedback
+  // message; over that we surface a 400 so the caller can shorten and retry.
+  if (content.length > MAX_CONTENT_LENGTH) {
+    return NextResponse.json(
+      { error: `Content exceeds maximum length of ${MAX_CONTENT_LENGTH} characters` },
+      { status: 400 }
+    );
+  }
 
   if (resend && notificationEmail && fromEmail) {
     try {
+      // Drop the suffix entirely when it's empty (missing/non-string/all-stripped
+      // emoji) so the subject doesn't render with a trailing space.
+      const subjectSuffix = sanitizeSubjectSuffix(emoji, MAX_EMOJI_LENGTH);
+      const subject = subjectSuffix
+        ? `New Feedback Received ${subjectSuffix}`
+        : "New Feedback Received";
       await resend.emails.send({
         from: fromEmail,
         to: notificationEmail,
-        subject: `New Feedback Received ${emoji || ""}`,
+        subject,
         html: generateEmailTemplate({ content, email, emoji, metadata }),
       });
     } catch (emailError) {
